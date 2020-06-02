@@ -1,15 +1,16 @@
 import io from 'socket.io-client'
-import { backendUrl } from '../config'
+//import { backendUrl } from '../config'
 
+const backendUrl = 'ws://localhost:9000'
 interface QrCodeServerResponse {
-  qrCode: string
-  identifier: any
+  authTokenQR: string
+  authToken: string
+  identifier: string
+  ws: string
 }
 
-export interface QrCodeClientResponse {
-  qrCode: string
+export interface QrCodeClientResponse extends QrCodeServerResponse {
   socket: SocketIOClient.Socket
-  identifier: string
 }
 
 interface Status {
@@ -17,30 +18,45 @@ interface Status {
   identifier: string
 }
 
+const sockMap: {[id: string]: any} = {}
+/*  : {[identifier: string]: {
+  socket: WebSocket,
+  identifier: string,
+  msgN: number,
+  ws: string
+} = {}
+*/
+
 export const getQrCode = (
   socketName: string,
-  query: any,
 ): Promise<QrCodeClientResponse> => {
-  const socket: SocketIOClient.Socket = io(`${backendUrl}/${socketName}/`, {
-    forceNew: true,
-    query,
+  console.log('this is', `${backendUrl}/${socketName}`)
+  const socket = new WebSocket(`${backendUrl}/${socketName}`)
+  const promise = new Promise(resolve => {
+    socket.onmessage = (evt) => {
+      const { authTokenQR, authToken, identifier }: QrCodeServerResponse = JSON.parse(evt.data)
+      sockMap[identifier] = {
+        socket,
+        promise,
+        msgN: 0,
+        messages: {}
+      }
+      resolve({ authTokenQR, authToken, identifier, socket })
+    }
   })
-  return new Promise(resolve =>
-    socket.on('qrCode', ({ qrCode, identifier }: QrCodeServerResponse) =>
-      resolve({ qrCode, socket, identifier }),
-    ),
-  )
+  return promise as Promise<QrCodeClientResponse>
 }
 
-export const awaitStatus = ({ socket, identifier }: Status) => {
-  return new Promise((resolve, reject) => {
-    socket.on(identifier, (data: any) => {
-      const parsedData = JSON.parse(data)
-      if (parsedData.status === 'failure') {
-        reject(parsedData)
-      } else {
-        resolve(parsedData)
-      }
-    })
+export const getEncryptedData = (identifier: string, data: string): Promise<string> => {
+  return new Promise(resolve => {
+    const session = sockMap[identifier.toString()]
+    const ws = session.socket
+    const msgID = session.msgN++
+    const msg = session.messages[msgID] = { id: msgID, rpc: 'asymEncrypt', request: data }
+    ws.send(JSON.stringify(msg))
   })
+}
+
+export const awaitStatus = (identifier: string) => {
+  return sockMap[identifier].promise
 }
